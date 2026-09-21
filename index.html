@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Euler's Tour &amp; Circuit — Visualizer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Euler's Tour &amp; Circuit</h1>
+  <p>Enter a graph, then watch <strong>Hierholzer's algorithm</strong> find its Eulerian tour.</p>
+</header>
+
+<main class="grid">
+  <section class="panel controls">
+    <h2>1 &middot; Graph input</h2>
+    <p class="hint">One edge per line, e.g. <code>A-B</code>, or comma/space separated.</p>
+    <textarea id="input" rows="6" spellcheck="false"
+      placeholder="A-B&#10;B-C&#10;C-A"></textarea>
+
+    <div class="presets">
+      <button data-preset="triangle">Triangle <span>(circuit)</span></button>
+      <button data-preset="k4">K4 <span>(circuit)</span></button>
+      <button data-preset="trail">House <span>(trail)</span></button>
+      <button data-preset="star">Star <span>(none)</span></button>
+    </div>
+
+    <button id="loadBtn" class="primary">Load graph</button>
+    <div id="analysis" class="analysis"></div>
+
+    <h2>2 &middot; Animate</h2>
+    <button id="animateBtn" disabled class="primary">&#9654; Animate Hierholzer</button>
+    <label class="speed">
+      Speed
+      <input type="range" id="speed" min="20" max="900" value="350">
+      <span id="speedVal">350&nbsp;ms</span>
+    </label>
+    <button id="resetBtn">Reset</button>
+    <div id="circuit" class="circuit"></div>
+  </section>
+
+  <section class="panel view">
+    <svg id="svg" viewBox="0 0 820 620" width="820" height="620"
+      role="img" aria-label="Graph visualization"></svg>
+  </section>
+
+  <section class="panel log">
+    <h2>Algorithm log</h2>
+    <ul id="logList"></ul>
+  </section>
+</main>
+
+<script src="euler.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
