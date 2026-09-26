@@ -31,6 +31,13 @@ let oddSet = new Set();
 let usedSet = new Set();     // edges consumed by the algorithm
 let activeEdge = null;
 let running = false;
+let draggedNode = null;
+let selectedNode = null;   // vertex clicked, waiting for a second click to connect
+let dragMoved = false;
+let downPos = null;
+let lastClickNode = null;  // for manual double-click detection (see handleNodeClick)
+let lastClickTime = 0;
+const DBLCLICK_MS = 350;
 
 function el(name, attrs) {
   const e = document.createElementNS(NS, name);
@@ -39,7 +46,12 @@ function el(name, attrs) {
 }
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
-function delay() { return Number(speedEl.value); }
+// Slider's raw value increases to the right, but a bigger delay means SLOWER
+// animation. Invert it so the right-hand side of the slider is the fast end.
+function delay() {
+  const min = Number(speedEl.min), max = Number(speedEl.max);
+  return max + min - Number(speedEl.value);
+}
 function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -56,6 +68,158 @@ function layout(n) {
   }
   nodeR = n <= 8 ? 20 : n <= 16 ? 14 : 11;
 }
+
+// ---------- dragging + click-to-build ----------
+function svgPoint(evt) {
+  const pt = svg.createSVGPoint();
+  pt.x = evt.clientX;
+  pt.y = evt.clientY;
+  return pt.matrixTransform(svg.getScreenCTM().inverse());
+}
+
+function onNodePointerDown(i, evt) {
+  evt.preventDefault();
+  draggedNode = i;
+  dragMoved = false;
+  downPos = svgPoint(evt);
+  svg.classList.add('dragging');
+}
+
+function onSvgPointerMove(evt) {
+  if (draggedNode === null) return;
+  const p = svgPoint(evt);
+  if (!dragMoved) {
+    const dx = p.x - downPos.x, dy = p.y - downPos.y;
+    if (Math.hypot(dx, dy) > 4) dragMoved = true;
+  }
+  pos[draggedNode] = { x: p.x, y: p.y };
+  render();
+}
+
+function onSvgPointerUp() {
+  if (draggedNode !== null) {
+    if (!dragMoved) handleNodeClick(draggedNode);   // it was a click, not a drag
+    draggedNode = null;
+  }
+  svg.classList.remove('dragging');
+}
+
+function onSvgBackgroundPointerDown(evt) {
+  if (evt.target !== svg) return;    // ignore clicks on nodes/edges, handled elsewhere
+  if (selectedNode !== null) { selectedNode = null; render(); return; }  // cancel pending connection
+  const p = svgPoint(evt);
+  addVertexAt(p.x, p.y);
+}
+
+function handleNodeClick(i) {
+  const now = performance.now();
+  if (lastClickNode === i && (now - lastClickTime) < DBLCLICK_MS) {
+    lastClickNode = null;
+    deleteVertex(i);          // second click on the same vertex, fast enough: delete it
+    return;
+  }
+  lastClickNode = i;
+  lastClickTime = now;
+
+  if (selectedNode === null) { selectedNode = i; render(); return; }
+  if (selectedNode === i) { selectedNode = null; render(); return; }     // clicked itself again: cancel
+  addEdgeBetween(selectedNode, i);
+  selectedNode = null;
+}
+
+function nextLabel() {
+  const used = new Set(g.labels);
+  for (let c = 65; c <= 90; c++) {
+    const ch = String.fromCharCode(c);
+    if (!used.has(ch)) return ch;
+  }
+  let n = 1;
+  while (used.has('V' + n)) n++;
+  return 'V' + n;
+}
+
+function addVertexAt(x, y) {
+  if (!g) return;
+  g.labels.push(nextLabel());
+  g.adj.push([]);
+  g.n += 1;
+  pos.push({ x, y });
+  refreshFromGraph();
+}
+
+function addEdgeBetween(a, b) {
+  const eid = g.edges.length;
+  g.edges.push({ a, b });
+  g.adj[a].push(eid);
+  g.adj[b].push(eid);
+  refreshFromGraph();
+}
+
+function deleteVertex(i) {
+  if (!g || i < 0 || i >= g.n) return;
+  const newEdges = [];
+  for (const e of g.edges) {
+    if (e.a === i || e.b === i) continue;      // drop edges touching the deleted vertex
+    newEdges.push({
+      a: e.a > i ? e.a - 1 : e.a,               // shift indices above i down by one
+      b: e.b > i ? e.b - 1 : e.b,
+    });
+  }
+  g.labels.splice(i, 1);
+  g.n -= 1;
+  pos.splice(i, 1);
+  g.edges = newEdges;
+  g.adj = Array.from({ length: g.n }, () => []);
+  g.edges.forEach((e, eid) => { g.adj[e.a].push(eid); g.adj[e.b].push(eid); });
+
+  selectedNode = null;
+  draggedNode = null;
+  lastClickNode = null;
+  refreshFromGraph();
+}
+
+function edgeListText(gr) {
+  return gr.edges.map((e) => `${gr.labels[e.a]}-${gr.labels[e.b]}`).join(', ');
+}
+
+// Recompute analysis/degrees/steps after a canvas edit, WITHOUT resetting
+// existing vertex positions (only new vertices get their click position).
+function refreshFromGraph() {
+  running = false;
+  analysis = euler.analyze(g);
+  degree = g.adj.map((a) => a.length);
+  oddSet = new Set(analysis.odd);
+  nodeR = g.n <= 8 ? 20 : g.n <= 16 ? 14 : 11;
+  stateHead = null;
+  stateTrail = [];
+  usedSet = new Set();
+  activeEdge = null;
+  clearLog();
+  updatePath();
+  render();
+
+  const degTxt = g.labels.map((l, i) => `${l}${degree[i]}`).join(', ');
+  const oddTxt = analysis.odd.length
+    ? `<br><span class="odd-note">odd-degree: ${analysis.odd.map((i) => esc(g.labels[i])).join(', ')}</span>`
+    : '';
+  analysisEl.className = 'analysis ' + (analysis.valid ? 'ok' : 'bad');
+  analysisEl.innerHTML = `<span class="deg">${esc(degTxt)}</span>${oddTxt}<br>${esc(analysis.msg)}`;
+
+  if (analysis.valid && g.n > 0) {
+    stepResult = euler.computeSteps(g, analysis.start);
+    animateBtn.disabled = false;
+  } else {
+    stepResult = null;
+    animateBtn.disabled = true;
+  }
+
+  inputEl.value = edgeListText(g);   // keep the textbox in sync with canvas edits
+}
+
+svg.addEventListener('pointermove', onSvgPointerMove);
+svg.addEventListener('pointerdown', onSvgBackgroundPointerDown);
+window.addEventListener('pointerup', onSvgPointerUp);
+window.addEventListener('pointercancel', onSvgPointerUp);
 
 function clip(a, b, r) {
   const dx = b.x - a.x, dy = b.y - a.y;
@@ -87,7 +251,9 @@ function render() {
     const p = pos[i];
     const odd = oddSet.has(i);
     const head = stateHead === i;
-    const grp = el('g', { class: 'node' + (odd ? ' odd' : '') + (head ? ' head' : '') });
+    const sel = selectedNode === i;
+    const grp = el('g', { class: 'node' + (odd ? ' odd' : '') + (head ? ' head' : '') + (sel ? ' selected' : '') + ' draggable' });
+    grp.addEventListener('pointerdown', (evt) => onNodePointerDown(i, evt));
 
     if (head) grp.appendChild(el('circle', { cx: p.x, cy: p.y, r: nodeR + 6, class: 'pulse' }));
     grp.appendChild(el('circle', { cx: p.x, cy: p.y, r: nodeR, class: 'disc' }));
@@ -149,6 +315,8 @@ function clearLog() { logList.textContent = ''; }
 // ---------- loading ----------
 function loadGraph() {
   running = false;
+  selectedNode = null;
+  lastClickNode = null;
   g = euler.parseGraph(inputEl.value);
 
   if (!g.n || g.edges.length === 0) {
@@ -272,11 +440,13 @@ async function animateTour() {
 
 // ---------- wiring ----------
 speedEl.addEventListener('input', () => {
-  speedVal.textContent = speedEl.value + ' ms';
+  speedVal.textContent = delay() + ' ms';
 });
 loadBtn.addEventListener('click', () => { running = false; loadGraph(); });
 resetBtn.addEventListener('click', () => {
   running = false;
+  selectedNode = null;
+  lastClickNode = null;
   stateHead = null;
   stateTrail = [];
   usedSet = new Set();
@@ -300,5 +470,6 @@ document.querySelectorAll('.presets button').forEach((btn) => {
 });
 
 // show a sample immediately
+speedVal.textContent = delay() + ' ms';
 inputEl.value = PRESETS.triangle;
 loadGraph();
